@@ -51,7 +51,7 @@ data class ChatMessage(
 enum class AppLanguage(val displayName: String, val promptInstruction: String) {
     ENGLISH(
         "English",
-        "Explain the solution in clear, simple step-by-step English."
+        "Write the entire response in clear, simple step-by-step English only. Do not use Thai, Telugu, Hindi, or any other script."
     ),
     TELUGU(
         "తెలుగు",
@@ -328,10 +328,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             ocrFixes = fixes
         )
         val assistantMsgId = java.util.UUID.randomUUID().toString()
+        val initialDiagram = DiagramExtractor.extract("", messageText)
         val assistantPlaceholder = ChatMessage(
             id = assistantMsgId,
             sender = MessageSender.ASSISTANT,
             text = "",
+            diagram = initialDiagram,
             isStreaming = true
         )
 
@@ -357,6 +359,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val isFirst = _uiState.value.messages.count { it.sender == MessageSender.USER } <= 1
                 val langInstruction = _uiState.value.selectedLanguage.promptInstruction
 
+                Log.e("HomeViewModel", ">>> Starting chat collection for: $messageText")
                 GemmaEngine.chat(
                     messageText,
                     isFirstMessage = isFirst,
@@ -368,7 +371,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         state.copy(
                             messages = state.messages.map { msg ->
                                 if (msg.id == assistantMsgId) {
-                                    msg.copy(text = currentText, isStreaming = true)
+                                    msg.copy(text = currentText, diagram = msg.diagram ?: initialDiagram, isStreaming = true)
                                 } else {
                                     msg
                                 }
@@ -378,8 +381,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val fullResponse = responseBuilder.toString()
-                val diagram = DiagramExtractor.extract(fullResponse, messageText)
+                Log.e("HomeViewModel", ">>> Finished chat collection! Received ${fullResponse.length} chars")
+                val diagram = DiagramExtractor.extract(fullResponse, messageText) ?: initialDiagram
                 val cleanText = DiagramExtractor.stripDiagramTags(fullResponse)
+                val displayText = if (cleanText.isNotBlank()) {
+                    cleanText
+                } else if (diagram != null) {
+                    "Here is the interactive step-by-step simulation model:"
+                } else {
+                    "No response generated. Please tap 'Clear' or try rephrasing your question."
+                }
 
                 _uiState.update { state ->
                     state.copy(
@@ -387,7 +398,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         messages = state.messages.map { msg ->
                             if (msg.id == assistantMsgId) {
                                 msg.copy(
-                                    text = cleanText,
+                                    text = displayText,
                                     diagram = diagram,
                                     isStreaming = false
                                 )
@@ -406,7 +417,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         messages = state.messages.map { msg ->
                             if (msg.id == assistantMsgId) {
                                 msg.copy(
-                                    text = if (msg.text.isNotBlank()) msg.text else "Sorry, an error occurred while solving this problem.",
+                                    text = if (initialDiagram != null) "Here is the interactive simulation model for your problem:" else "Error generating response: ${e.message}",
+                                    diagram = initialDiagram,
                                     isStreaming = false
                                 )
                             } else {

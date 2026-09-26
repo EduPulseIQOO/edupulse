@@ -9,6 +9,7 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
+import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -27,7 +28,12 @@ object GemmaEngine {
     private const val MODEL_FILENAME = "gemma-4-E2B-it-gpu.litertlm"
 
     fun buildSystemInstruction(languageInstruction: String = ""): String {
-        val langClause = if (languageInstruction.isNotBlank()) "\n[Language Requirement]: $languageInstruction\n" else ""
+        val langClause = if (languageInstruction.isNotBlank()) {
+            "\n[Language Requirement]: $languageInstruction\n" +
+                "CRITICAL: Write strictly and exclusively in the requested language. Under NO circumstances should you produce Thai (ภาษาไทย), Chinese, or any other foreign language text.\n"
+        } else {
+            "\n[Language Requirement]: Strict English only. Under NO circumstances should you produce Thai (ภาษาไทย), Chinese, or any non-English script. Every single word and character must be in English.\n"
+        }
         return "You are EduPulse, an offline AI tutor and homework problem solver.\n" +
             "Write in clean, plain readable text. Do NOT use LaTeX commands (never write \\frac, \\text, \\times, or $$). Use simple standard math symbols (+, -, *, /, =, ^).\n" +
             langClause +
@@ -41,13 +47,34 @@ object GemmaEngine {
             "Calculation / Explanation:\n" +
             "Final Answer:\n" +
             "\n" +
-            "Step 3: If this problem involves physics (motion, kinematics, forces, projectile, or mechanics), conclude your response with a structured simulation descriptor at the very end in one of these formats:\n" +
-            "- 1D Motion / Kinematics (acceleration, braking, deceleration, free fall, constant speed):\n" +
+            "Step 3: If this problem involves a visual simulation in Physics, Mathematics, Chemistry, or Biology, conclude your response with a structured simulation descriptor at the very end in one of these formats:\n" +
+            "- Physics Motion & Kinematics (ANY problem about cars, vehicles, runners, moving bodies, velocity, speed, acceleration, braking, stopping distance, or falling):\n" +
             "[DIAGRAM:KINEMATICS | mass=... | u=... | v=... | a=... | F=... | s=... | t=...]\n" +
-            "- 2D Parabolic Projectile Motion (launch angle, velocity, range, height):\n" +
+            "- Physics 2D Projectile (angle, launch velocity, range, height):\n" +
             "[DIAGRAM:PROJECTILE | velocity=... | angle=... | range=... | height=... | time=...]\n" +
-            "- Force Balance / Equilibrium (normal, gravity, friction, applied):\n" +
-            "[DIAGRAM:FREE_BODY | mass=... | normal=... | gravity=... | applied=... | friction=... | net=...]"
+            "- Physics Forces (ONLY for static equilibrium e.g. hanging lamp, book resting on table):\n" +
+            "[DIAGRAM:FREE_BODY | mass=... | normal=... | gravity=... | applied=... | friction=... | net=...]\n" +
+            "- Physics Electric Circuit (voltage V, resistance R):\n" +
+            "[DIAGRAM:CIRCUIT | v=... | r=...]\n" +
+            "- Physics Simple Pendulum (length L in meters, gravity g):\n" +
+            "[DIAGRAM:PENDULUM | length=... | gravity=...]\n" +
+            "- Physics Wave Motion (wave speed v, frequency f, wavelength lambda):\n" +
+            "[DIAGRAM:WAVE | v=... | f=... | lambda=...]\n" +
+            "- Mathematics Function Grapher (linear y=mx+c or quadratic y=ax^2+bx+c or trig):\n" +
+            "[DIAGRAM:GRAPH | eq=... | a=... | b=... | c=... | type=QUADRATIC]\n" +
+            "- Chemistry Bohr Atomic Model (element name, symbol, atomic number Z, mass number A):\n" +
+            "[DIAGRAM:ATOM | element=... | symbol=... | z=... | a=...]\n" +
+            "- Chemistry Acid-Base pH Scale (substance name, pH value between 0-14):\n" +
+            "[DIAGRAM:PH | substance=... | ph=...]\n" +
+            "- Chemistry Reaction (reaction name, balanced equation, reaction type):\n" +
+            "[DIAGRAM:REACTION | name=... | eq=... | type=...]\n" +
+            "- Biology Punnett Square Genetics (trait name, parent 1 alleles e.g. Bb, parent 2 alleles e.g. Bb, dominant trait, recessive trait):\n" +
+            "[DIAGRAM:PUNNETT | trait=... | p1=... | p2=... | dominant=... | recessive=...]\n" +
+            "- Biology Cell Structure (cell type e.g. Plant Cell or Animal Cell):\n" +
+            "[DIAGRAM:CELL | type=Plant Cell]\n" +
+            "- Biology Energy Pyramid (ecosystem name, primary producer energy in J):\n" +
+            "[DIAGRAM:PYRAMID | name=... | energy=...]\n" +
+            "Important: If this is a conceptual theory, essay, or definition question with no quantitative or visual model, do NOT output any [DIAGRAM:...] tag."
     }
 
     private var engine: Engine? = null
@@ -126,20 +153,24 @@ object GemmaEngine {
         isFirstMessage: Boolean = false,
         languageInstruction: String = ""
     ): Flow<String> = callbackFlow {
+        android.util.Log.e("GemmaEngine", ">>> chat() called: message='$messageText'")
         val eng = engine ?: throw IllegalStateException("GemmaEngine not initialized. Call initialize() first.")
 
-        val conversation = if (isFirstMessage || activeConversation == null) {
-            eng.createConversation(
-                ConversationConfig(
-                    systemInstruction = Contents.of(buildSystemInstruction(languageInstruction))
+        // Fresh conversation per question ensures 100% clean GPU KV-cache
+        val conv = eng.createConversation(
+            ConversationConfig(
+                systemInstruction = Contents.of(buildSystemInstruction(languageInstruction)),
+                samplerConfig = SamplerConfig(
+                    topK = 40,
+                    topP = 0.95,
+                    temperature = 0.1,
+                    seed = 42
                 )
-            ).also { activeConversation = it }
-        } else {
-            activeConversation!!
-        }
+            )
+        ).also { activeConversation = it }
 
         val prompt = buildString {
-            if (isFirstMessage) append("Question:\n")
+            append("Question:\n")
             append(messageText)
             if (languageInstruction.isNotBlank()) {
                 append("\n\n[Instruction: ")
@@ -147,26 +178,38 @@ object GemmaEngine {
                 append("]")
             }
         }
-        conversation.sendMessageAsync(prompt, object : com.google.ai.edge.litertlm.MessageCallback {
+
+        android.util.Log.e("GemmaEngine", "Sending prompt (${prompt.length} chars) to LiteRT-LM...")
+        var tokenCount = 0
+
+        conv.sendMessageAsync(prompt, object : com.google.ai.edge.litertlm.MessageCallback {
             override fun onMessage(message: Message) {
                 val text = extractText(message)
                 if (text.isNotEmpty()) {
+                    tokenCount++
+                    if (tokenCount <= 3 || tokenCount % 15 == 0) {
+                        android.util.Log.e("GemmaEngine", "Token #$tokenCount: ${text.take(30)}")
+                    }
                     trySend(text)
                 }
             }
 
             override fun onDone() {
-                close()
+                android.util.Log.e("GemmaEngine", "onDone() reached! Total tokens emitted: $tokenCount")
+                // Explicit parameter avoids Kotlin synthetic close$default NoSuchMethodError
+                val noError: Throwable? = null
+                channel.close(noError)
             }
 
             override fun onError(throwable: Throwable) {
+                android.util.Log.e("GemmaEngine", "onError() in LiteRT-LM: ${throwable.message}", throwable)
                 activeConversation = null
-                close(throwable)
+                channel.close(throwable)
             }
         })
 
         awaitClose {
-            // Callback completed or flow cancelled
+            android.util.Log.e("GemmaEngine", "awaitClose: flow collector finished.")
         }
     }
 

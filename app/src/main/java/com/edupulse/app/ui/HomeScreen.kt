@@ -20,6 +20,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -317,26 +320,19 @@ private fun ChatScreen(
                 }
             }
 
-            Surface(
+            OutlinedButton(
                 onClick = { showSiliconDialog = true },
                 shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
-                modifier = Modifier.height(24.dp)
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.height(34.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                ) {
-                    Text("📊", fontSize = 10.sp)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        "Silicon Stats",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                }
+                Text(
+                    "📊 Silicon Stats",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
 
@@ -355,21 +351,29 @@ private fun ChatScreen(
             )
             AppLanguage.entries.forEach { lang ->
                 val isSelected = uiState.selectedLanguage == lang
-                Surface(
-                    onClick = { onLanguageSelected(lang) },
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.height(28.dp)
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 10.dp)
+                if (isSelected) {
+                    FilledTonalButton(
+                        onClick = { onLanguageSelected(lang) },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.height(34.dp)
                     ) {
                         Text(
                             text = lang.displayName,
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { onLanguageSelected(lang) },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text(
+                            text = lang.displayName,
+                            style = MaterialTheme.typography.labelSmall
                         )
                     }
                 }
@@ -464,40 +468,6 @@ private fun ChatScreen(
                                     Text("🖼️ Upload", fontWeight = FontWeight.SemiBold)
                                 }
                             }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Text(
-                        text = "Or try an example question:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Start)
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    val examples = listOf(
-                        "A body of mass 5 kg moving at 10 m/s is brought to rest in 4 seconds. Find the force applied and distance travelled.",
-                        "State Newton's Second Law of Motion with mathematical formula and unit.",
-                        "What is the difference between speed and velocity?"
-                    )
-
-                    examples.forEach { example ->
-                        Surface(
-                            onClick = { onInputTextChanged(example) },
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "💡 $example",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(12.dp)
-                            )
                         }
                     }
                 }
@@ -617,7 +587,7 @@ private fun ChatScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
-                                            } else {
+                                            } else if (msg.text.isNotEmpty()) {
                                                 Text(
                                                     text = msg.text,
                                                     style = MaterialTheme.typography.bodyMedium,
@@ -630,10 +600,11 @@ private fun ChatScreen(
                                                         fontWeight = FontWeight.Bold
                                                     )
                                                 }
-                                                if (msg.diagram != null) {
-                                                    Spacer(modifier = Modifier.height(14.dp))
-                                                    DiagramCard(diagram = msg.diagram)
-                                                }
+                                            }
+
+                                            if (msg.diagram != null) {
+                                                Spacer(modifier = Modifier.height(14.dp))
+                                                DiagramCard(diagram = msg.diagram)
                                             }
                                         }
                                     }
@@ -751,7 +722,13 @@ private fun ChatScreen(
                         .padding(horizontal = 4.dp),
                     shape = RoundedCornerShape(22.dp),
                     maxLines = 4,
-                    textStyle = MaterialTheme.typography.bodyMedium
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (uiState.inputText.isNotBlank() && !uiState.isLoading) {
+                            onSendMessage(null)
+                        }
+                    })
                 )
 
                 // Send Button

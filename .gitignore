@@ -28,3 +28,5 @@ app/build/
 *.aab
 *.mp4
 local.properties
+
+data/

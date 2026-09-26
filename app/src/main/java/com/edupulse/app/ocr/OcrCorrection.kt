@@ -53,10 +53,14 @@ object OcrCorrection {
      *
      * Handles both attached units (e.g. "skg" → "5 kg", "l5N" → "15 N")
      * and space-separated number+unit pairs (e.g. "io m/s" → "10 m/s", "u seconds" → "4 seconds").
+     * Also checks domain-specific OKF confusion mapping (e.g. "isn" → "15N").
      *
      * Returns (cleanedText, listOfFixes).
      */
-    fun recoverDigitsNearUnits(text: String): Pair<String, List<Map<String, String>>> {
+    fun recoverDigitsNearUnits(
+        text: String,
+        extraConfusions: Map<String, String> = emptyMap()
+    ): Pair<String, List<Map<String, String>>> {
         val tokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
         val fixes = mutableListOf<Map<String, String>>()
         val out = mutableListOf<String>()
@@ -64,6 +68,15 @@ object OcrCorrection {
         var i = 0
         while (i < tokens.size) {
             val tok = tokens[i]
+
+            // 0. Check OKF knowledge confusion dictionary (e.g. "isn" -> "15N")
+            val knownFix = extraConfusions[tok] ?: extraConfusions[tok.lowercase()]
+            if (knownFix != null) {
+                fixes.add(mapOf("original" to tok, "fixed" to knownFix))
+                out.add(knownFix)
+                i++
+                continue
+            }
 
             // 1. Check attached unit suffix (e.g. "iom/s" -> "10 m/s", "5kg" -> "5 kg")
             val match = unitSuffixRegex.find(tok)

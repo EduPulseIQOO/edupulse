@@ -72,7 +72,13 @@ data class HomeUiState(
     val pendingOcrFixes: List<OcrFix> = emptyList(),
     val isLoading: Boolean = false,
     val loadingMessage: String = "",
-    val error: String? = null
+    val error: String? = null,
+    val showHistory: Boolean = false,
+    val currentSessionId: String = java.util.UUID.randomUUID().toString(),
+    val currentSessionTitle: String = "New Chat",
+    val currentSessionSubject: String = com.edupulse.app.history.QuerySubject.GENERAL.name,
+    val sessions: List<com.edupulse.app.history.ChatSession> = emptyList(),
+    val historyItems: List<com.edupulse.app.history.DoubtHistoryItem> = emptyList()
 )
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
@@ -92,6 +98,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        // Load offline chat sessions on startup
+        viewModelScope.launch {
+            try {
+                val sessions = com.edupulse.app.history.HistoryRepository.getSessions(application)
+                val legacy = com.edupulse.app.history.HistoryRepository.getHistory(application)
+                _uiState.update { it.copy(sessions = sessions, historyItems = legacy) }
+            } catch (e: Exception) {
+                Log.w("HomeViewModel", "Sessions load warning: ${e.message}")
+            }
+        }
+
         // Initialize Gemma engine in the background on app start
         viewModelScope.launch {
             try {
@@ -275,8 +292,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun processOcrText(rawText: String) {
         // Step 1: Fix unit format corruptions
         val unitFixed = OcrCorrection.fixUnitOcrErrors(rawText)
-        // Step 2: Dynamic digit recovery near units
-        val (cleaned, fixes) = OcrCorrection.recoverDigitsNearUnits(unitFixed)
+        // Step 2: Dynamic digit recovery near units + OKF domain confusions
+        val okfConfusions = com.edupulse.app.knowledge.OkfRepository.getOcrConfusionDictionary(getApplication())
+        val (cleaned, fixes) = OcrCorrection.recoverDigitsNearUnits(unitFixed, okfConfusions)
 
         _uiState.update {
             it.copy(
@@ -296,17 +314,25 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(pendingOcrFixes = emptyList()) }
     }
 
-    fun onClearChat() {
+    fun onNewChat() {
         ttsManager.stop()
         GemmaEngine.resetConversation()
         _uiState.update {
             it.copy(
+                currentSessionId = java.util.UUID.randomUUID().toString(),
+                currentSessionTitle = "New Chat",
+                currentSessionSubject = com.edupulse.app.history.QuerySubject.GENERAL.name,
                 messages = emptyList(),
                 inputText = "",
                 pendingOcrFixes = emptyList(),
-                error = null
+                error = null,
+                showHistory = false
             )
         }
+    }
+
+    fun onClearChat() {
+        onNewChat()
     }
 
     fun onLanguageSelected(language: AppLanguage) {
@@ -315,6 +341,94 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             GemmaEngine.resetConversation()
             _uiState.update { it.copy(selectedLanguage = language) }
         }
+    }
+
+    fun onToggleHistory(show: Boolean) {
+        _uiState.update { it.copy(showHistory = show) }
+    }
+
+    fun onSelectSession(session: com.edupulse.app.history.ChatSession) {
+        ttsManager.stop()
+        GemmaEngine.resetConversation()
+        val lang = AppLanguage.entries.find { it.name == session.languageCode } ?: AppLanguage.ENGLISH
+        _uiState.update {
+            it.copy(
+                currentSessionId = session.id,
+                currentSessionTitle = session.title,
+                currentSessionSubject = session.subject,
+                messages = session.messages,
+                selectedLanguage = lang,
+                showHistory = false,
+                error = null
+            )
+        }
+    }
+
+    fun onDeleteSession(sessionId: String) {
+        viewModelScope.launch {
+            val updated = com.edupulse.app.history.HistoryRepository.deleteSession(getApplication(), sessionId)
+            val legacy = com.edupulse.app.history.HistoryRepository.getHistory(getApplication())
+            val isActiveSession = _uiState.value.currentSessionId == sessionId
+            _uiState.update {
+                it.copy(
+                    sessions = updated,
+                    historyItems = legacy
+                )
+            }
+            if (isActiveSession) {
+                onNewChat()
+            }
+        }
+    }
+
+    fun onClearAllSessions() {
+        viewModelScope.launch {
+            com.edupulse.app.history.HistoryRepository.clearAllSessions(getApplication())
+            _uiState.update {
+                it.copy(
+                    sessions = emptyList(),
+                    historyItems = emptyList()
+                )
+            }
+            onNewChat()
+        }
+    }
+
+    fun onRestoreHistoryItem(item: com.edupulse.app.history.DoubtHistoryItem) {
+        val matchingSession = _uiState.value.sessions.find { it.id == item.id }
+        if (matchingSession != null) {
+            onSelectSession(matchingSession)
+        } else {
+            ttsManager.stop()
+            GemmaEngine.resetConversation()
+            val userMsg = ChatMessage(sender = MessageSender.USER, text = item.question)
+            val asstMsg = ChatMessage(
+                sender = MessageSender.ASSISTANT,
+                text = item.solution,
+                diagram = item.diagram,
+                isStreaming = false
+            )
+            val lang = AppLanguage.entries.find { it.name == item.languageCode } ?: AppLanguage.ENGLISH
+            _uiState.update {
+                it.copy(
+                    currentSessionId = item.id,
+                    currentSessionTitle = item.title,
+                    currentSessionSubject = item.subject,
+                    messages = listOf(userMsg, asstMsg),
+                    selectedLanguage = lang,
+                    showHistory = false,
+                    error = null
+                )
+            }
+        }
+    }
+
+    fun onDeleteHistoryItem(id: String) {
+        onDeleteSession(id)
+    }
+
+    fun onClearAllHistory() {
+        onClearAllSessions()
     }
 
     fun onSendMessage(overrideText: String? = null) {
@@ -335,6 +449,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             isStreaming = true
         )
 
+        // Capture previous messages before updating state to calculate sliding context window
+        val previousMessages = _uiState.value.messages
+        val previousUserCount = previousMessages.count { it.sender == MessageSender.USER }
+        val isFirst = previousUserCount == 0
+
+        // Context Window: For follow-ups (turn 2+), pass the sliding window of the last 4 messages (2 turns).
+        val contextWindow = if (isFirst) {
+            emptyList()
+        } else {
+            previousMessages.takeLast(4)
+        }
+
         _uiState.update {
             it.copy(
                 messages = it.messages + userMsg + assistantPlaceholder,
@@ -354,12 +480,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val responseBuilder = StringBuilder()
-                val isFirst = _uiState.value.messages.count { it.sender == MessageSender.USER } <= 1
                 val langInstruction = _uiState.value.selectedLanguage.promptInstruction
 
+                val okfGrounding = com.edupulse.app.knowledge.OkfRepository.getGroundingPrompt(getApplication(), messageText)
+                val effectivePrompt = if (okfGrounding != null) "$messageText\n$okfGrounding" else messageText
+
                 GemmaEngine.chat(
-                    messageText,
+                    effectivePrompt,
                     isFirstMessage = isFirst,
+                    contextWindow = contextWindow,
                     languageInstruction = langInstruction
                 ).collect { chunk ->
                     responseBuilder.append(chunk)
@@ -381,20 +510,63 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val diagram = DiagramExtractor.extract(fullResponse, messageText)
                 val cleanText = DiagramExtractor.stripDiagramTags(fullResponse)
 
+                val updatedMessages = _uiState.value.messages.map { msg ->
+                    if (msg.id == assistantMsgId) {
+                        msg.copy(
+                            text = cleanText,
+                            diagram = diagram,
+                            isStreaming = false
+                        )
+                    } else {
+                        msg
+                    }
+                }
+
+                // Compute session title and subject
+                val subject = com.edupulse.app.history.QueryClassifier.classify(messageText, diagram)
+                val existingTitle = _uiState.value.currentSessionTitle
+                val sessionTitle = if (isFirst || existingTitle == "New Chat") {
+                    when (subject) {
+                        com.edupulse.app.history.QuerySubject.PROJECTILE -> "Projectile (u=${(diagram as? PhysicsDiagram.Projectile)?.velocity ?: "?"}, θ=${(diagram as? PhysicsDiagram.Projectile)?.angle ?: "?"})"
+                        com.edupulse.app.history.QuerySubject.KINEMATICS -> "Kinematics (u=${(diagram as? PhysicsDiagram.Kinematics)?.initialVelocity ?: "?"}, a=${(diagram as? PhysicsDiagram.Kinematics)?.acceleration ?: "?"})"
+                        com.edupulse.app.history.QuerySubject.FORCES -> "Forces (${(diagram as? PhysicsDiagram.FreeBody)?.appliedForce ?: (diagram as? PhysicsDiagram.FreeBody)?.mass ?: "F"})"
+                        com.edupulse.app.history.QuerySubject.PHYSICS -> "Physics: ${messageText.take(28)}"
+                        com.edupulse.app.history.QuerySubject.CHEMISTRY -> "Chemistry: ${messageText.take(28)}"
+                        com.edupulse.app.history.QuerySubject.MATH -> "Math: ${messageText.take(28)}"
+                        com.edupulse.app.history.QuerySubject.GENERAL -> if (messageText.length > 28) messageText.take(28) + "..." else messageText
+                    }
+                } else {
+                    existingTitle
+                }
+
+                val sessionSubject = if (isFirst || _uiState.value.currentSessionSubject == com.edupulse.app.history.QuerySubject.GENERAL.name) {
+                    subject.name
+                } else {
+                    _uiState.value.currentSessionSubject
+                }
+
+                val currentSession = com.edupulse.app.history.ChatSession(
+                    id = _uiState.value.currentSessionId,
+                    title = sessionTitle,
+                    subject = sessionSubject,
+                    createdAt = updatedMessages.firstOrNull()?.timestamp ?: System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis(),
+                    languageCode = _uiState.value.selectedLanguage.name,
+                    messages = updatedMessages
+                )
+
+                // Persist session to local storage
+                val updatedSessions = com.edupulse.app.history.HistoryRepository.saveSession(getApplication(), currentSession)
+                val legacyHistory = com.edupulse.app.history.HistoryRepository.getHistory(getApplication())
+
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,
-                        messages = state.messages.map { msg ->
-                            if (msg.id == assistantMsgId) {
-                                msg.copy(
-                                    text = cleanText,
-                                    diagram = diagram,
-                                    isStreaming = false
-                                )
-                            } else {
-                                msg
-                            }
-                        }
+                        messages = updatedMessages,
+                        currentSessionTitle = sessionTitle,
+                        currentSessionSubject = sessionSubject,
+                        sessions = updatedSessions,
+                        historyItems = legacyHistory
                     )
                 }
             } catch (e: Exception) {

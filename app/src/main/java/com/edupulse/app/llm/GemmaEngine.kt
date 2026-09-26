@@ -126,15 +126,18 @@ object GemmaEngine {
 
     /**
      * Send a question or follow-up to Gemma and collect streamed response chunks.
+     * Supports a sliding context window to prevent mobile GPU context overflow.
      */
     fun chat(
         messageText: String,
         isFirstMessage: Boolean = false,
+        contextWindow: List<com.edupulse.app.ui.ChatMessage> = emptyList(),
         languageInstruction: String = ""
     ): Flow<String> = callbackFlow {
         val eng = engine ?: throw IllegalStateException("GemmaEngine not initialized. Call initialize() first.")
 
-        val conversation = if (isFirstMessage || activeConversation == null) {
+        val needsNewConversation = isFirstMessage || activeConversation == null || contextWindow.isNotEmpty()
+        val conversation = if (needsNewConversation) {
             eng.createConversation(
                 ConversationConfig(
                     systemInstruction = Contents.of(buildSystemInstruction(languageInstruction))
@@ -145,8 +148,20 @@ object GemmaEngine {
         }
 
         val prompt = buildString {
-            if (isFirstMessage) append("Question:\n")
-            append(messageText)
+            if (contextWindow.isNotEmpty()) {
+                append("[Previous Context]:\n")
+                val recent = contextWindow.takeLast(4)
+                for (msg in recent) {
+                    val role = if (msg.sender == com.edupulse.app.ui.MessageSender.USER) "Student" else "Tutor"
+                    val trimmed = msg.text.lines().take(3).joinToString(" ").take(200)
+                    append("$role: $trimmed\n")
+                }
+                append("\n[Follow-up Question]:\n")
+                append(messageText)
+            } else {
+                if (isFirstMessage) append("Question:\n")
+                append(messageText)
+            }
             if (languageInstruction.isNotBlank()) {
                 append("\n\n[Instruction: ")
                 append(languageInstruction)

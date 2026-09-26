@@ -29,3 +29,4 @@ app/build/
 *.mp4
 local.properties
 
+data/

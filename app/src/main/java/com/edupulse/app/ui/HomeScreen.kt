@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -92,9 +93,26 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
             onSendMessage = { viewModel.onSendMessage(it) },
             onDismissOcrFixes = { viewModel.onDismissOcrFixes() },
             onClearChat = { viewModel.onClearChat() },
+            onNewChat = { viewModel.onNewChat() },
             onLanguageSelected = { viewModel.onLanguageSelected(it) },
             onSpeakMessage = { id, text -> viewModel.onSpeakMessage(id, text) },
-            onStopSpeaking = { viewModel.onStopSpeaking() }
+            onStopSpeaking = { viewModel.onStopSpeaking() },
+            onOpenHistory = { viewModel.onToggleHistory(true) }
+        )
+    }
+
+    if (uiState.showHistory) {
+        com.edupulse.app.ui.components.HistorySheet(
+            sessions = uiState.sessions,
+            currentSessionId = uiState.currentSessionId,
+            onDismiss = { viewModel.onToggleHistory(false) },
+            onSelectSession = { viewModel.onSelectSession(it) },
+            onDeleteSession = { viewModel.onDeleteSession(it) },
+            onClearAll = { viewModel.onClearAllSessions() },
+            onNewChat = {
+                viewModel.onNewChat()
+                viewModel.onToggleHistory(false)
+            }
         )
     }
 }
@@ -210,9 +228,11 @@ private fun ChatScreen(
     onSendMessage: (String?) -> Unit,
     onDismissOcrFixes: () -> Unit,
     onClearChat: () -> Unit,
+    onNewChat: () -> Unit,
     onLanguageSelected: (AppLanguage) -> Unit,
     onSpeakMessage: (String, String) -> Unit,
-    onStopSpeaking: () -> Unit
+    onStopSpeaking: () -> Unit,
+    onOpenHistory: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -242,21 +262,59 @@ private fun ChatScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f, fill = false)) {
                 Text(
                     text = "EduPulse",
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "AI Homework & Problem Solver",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = if (uiState.messages.isNotEmpty()) uiState.currentSessionTitle else "AI Homework & Problem Solver",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
+            Spacer(modifier = Modifier.width(8.dp))
+
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // New Doubt / Chat Button
+                FilledTonalButton(
+                    onClick = onNewChat,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("+ New", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // History Button with Sessions Badge
+                IconButton(
+                    onClick = onOpenHistory,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    BadgedBox(
+                        badge = {
+                            if (uiState.sessions.isNotEmpty()) {
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ) {
+                                    Text("${uiState.sessions.size}")
+                                }
+                            }
+                        }
+                    ) {
+                        Text("💬", fontSize = 17.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 // Offline / On-Device Badge
                 Surface(
                     shape = RoundedCornerShape(16.dp),

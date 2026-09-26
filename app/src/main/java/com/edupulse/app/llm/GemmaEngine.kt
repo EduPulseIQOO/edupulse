@@ -40,6 +40,11 @@ object GemmaEngine {
             "\n" +
             "Step 1: Reconstruct the true intended question by intelligently correcting OCR misreads, garbled words, or letter-digit confusions (e.g. 'mau' -> 'mass', 'bady' -> 'body', '11 s boought' -> 'is brought'). State the clean question under 'Clean Question:'.\n" +
             "\n" +
+            "Mathematical Rules:\n" +
+            "- If [GROUNDING KNOWLEDGE - OKF] is provided, you MUST strictly use its verified formulas.\n" +
+            "- For kinematics braking/stopping distance: v^2 = u^2 - 2*a*s and s = u^2 / (2 * a). When coming to rest, final velocity v = 0, so deceleration a = u^2 / (2 * s) and stopping distance s = u^2 / (2 * a). NEVER multiply u * v.\n" +
+            "- Always compute arithmetic carefully step-by-step.\n" +
+            "\n" +
             "Step 2: Solve the clean question step-by-step using this structure:\n" +
             "Clean Question:\n" +
             "Given / Key Facts:\n" +
@@ -93,24 +98,30 @@ object GemmaEngine {
     suspend fun initialize(context: Context) = withContext(Dispatchers.IO) {
         if (engine != null) return@withContext
 
-        var resolvedModelFile = File(context.filesDir, MODEL_FILENAME)
-        if (!resolvedModelFile.exists()) {
-            val externalModel = File(context.getExternalFilesDir(null), MODEL_FILENAME)
-            if (externalModel.exists()) {
-                resolvedModelFile = externalModel
-            } else {
+        val candidates = listOf(
+            File(context.filesDir, MODEL_FILENAME),
+            File(context.getExternalFilesDir(null), MODEL_FILENAME),
+            File(File(context.getExternalFilesDir(null), "models"), MODEL_FILENAME),
+            File("/sdcard/Android/data/${context.packageName}/files", MODEL_FILENAME),
+            File("/sdcard/Download", MODEL_FILENAME),
+            File("/sdcard", MODEL_FILENAME)
+        )
+        val resolvedModelFile = candidates.firstOrNull { it.exists() && it.length() > 0 }
+            ?: run {
                 // Try copying from assets if bundled there
+                val internalDest = File(context.filesDir, MODEL_FILENAME)
                 try {
                     context.assets.open(MODEL_FILENAME).use { input ->
-                        resolvedModelFile.outputStream().use { output -> input.copyTo(output) }
+                        internalDest.outputStream().use { output -> input.copyTo(output) }
                     }
+                    internalDest
                 } catch (_: Exception) {
                     throw IllegalStateException(
-                        "Model file not found. Place '$MODEL_FILENAME' in internal files (${context.filesDir}), external files (${context.getExternalFilesDir(null)}), or assets."
+                        "Model file '$MODEL_FILENAME' not found. Checked: ${candidates.joinToString { it.absolutePath }}"
                     )
                 }
             }
-        }
+        android.util.Log.i("GemmaEngine", "Found Gemma model at: ${resolvedModelFile.absolutePath} (${resolvedModelFile.length() / (1024 * 1024)} MB)")
 
         val backends = listOf(
             Backend.GPU(),
@@ -147,10 +158,12 @@ object GemmaEngine {
 
     /**
      * Send a question or follow-up to Gemma and collect streamed response chunks.
+     * Supports a sliding context window to prevent mobile GPU context overflow.
      */
     fun chat(
         messageText: String,
         isFirstMessage: Boolean = false,
+        contextWindow: List<com.edupulse.app.ui.ChatMessage> = emptyList(),
         languageInstruction: String = ""
     ): Flow<String> = callbackFlow {
         android.util.Log.e("GemmaEngine", ">>> chat() called: message='$messageText'")

@@ -57,8 +57,26 @@ object PaddleOcrEngine {
         if (targetFile.exists() && targetFile.length() > 0) {
             return targetFile
         }
-        Log.d(TAG, "Copying asset $assetPath to ${targetFile.absolutePath}...")
-        context.assets.open(assetPath).use { input ->
+        try {
+            Log.d(TAG, "Copying asset $assetPath to ${targetFile.absolutePath}...")
+            context.assets.open(assetPath).use { input ->
+                FileOutputStream(targetFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            return targetFile
+        } catch (e: Exception) {
+            Log.w(TAG, "Asset $assetPath not in APK, trying external files: ${e.message}")
+        }
+
+        val extCandidate1 = File(context.getExternalFilesDir(null), assetPath)
+        val extCandidate2 = File(context.getExternalFilesDir(null), targetFile.name)
+        val extCandidate3 = File(File(context.getExternalFilesDir(null), "models"), targetFile.name)
+        val source = listOf(extCandidate1, extCandidate2, extCandidate3).firstOrNull { it.exists() && it.length() > 0 }
+            ?: throw IllegalStateException("Model file '$assetPath' not found in assets or external storage.")
+
+        Log.d(TAG, "Copying external model ${source.absolutePath} to ${targetFile.absolutePath}...")
+        source.inputStream().use { input ->
             FileOutputStream(targetFile).use { output ->
                 input.copyTo(output)
             }

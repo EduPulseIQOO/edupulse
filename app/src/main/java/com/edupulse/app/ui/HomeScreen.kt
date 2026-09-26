@@ -38,6 +38,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import com.edupulse.app.diagram.DiagramCard
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -236,8 +239,8 @@ private fun ChatScreen(
     val listState = rememberLazyListState()
     var showSiliconDialog by remember { mutableStateOf(false) }
 
-    // Auto-scroll to bottom when new messages arrive or update
-    LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text?.length) {
+    // Scroll to bottom only when a new message is added (not on every streamed token)
+    LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.messages.size - 1)
         }
@@ -524,40 +527,6 @@ private fun ChatScreen(
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Text(
-                        text = "Or try an example question:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Start)
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    val examples = listOf(
-                        "A body of mass 5 kg moving at 10 m/s is brought to rest in 4 seconds. Find the force applied and distance travelled.",
-                        "State Newton's Second Law of Motion with mathematical formula and unit.",
-                        "What is the difference between speed and velocity?"
-                    )
-
-                    examples.forEach { example ->
-                        Surface(
-                            onClick = { onInputTextChanged(example) },
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "💡 $example",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
                 }
             } else {
                 // Messages List
@@ -662,6 +631,12 @@ private fun ChatScreen(
 
                                             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+                                            if (msg.diagram != null) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                DiagramCard(diagram = msg.diagram)
+                                                Spacer(modifier = Modifier.height(10.dp))
+                                            }
+
                                             if (msg.text.isEmpty() && msg.isStreaming) {
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
@@ -675,7 +650,7 @@ private fun ChatScreen(
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
-                                            } else {
+                                            } else if (msg.text.isNotEmpty()) {
                                                 Text(
                                                     text = msg.text,
                                                     style = MaterialTheme.typography.bodyMedium,
@@ -687,10 +662,6 @@ private fun ChatScreen(
                                                         color = MaterialTheme.colorScheme.primary,
                                                         fontWeight = FontWeight.Bold
                                                     )
-                                                }
-                                                if (msg.diagram != null) {
-                                                    Spacer(modifier = Modifier.height(14.dp))
-                                                    DiagramCard(diagram = msg.diagram)
                                                 }
                                             }
                                         }
@@ -809,7 +780,13 @@ private fun ChatScreen(
                         .padding(horizontal = 4.dp),
                     shape = RoundedCornerShape(22.dp),
                     maxLines = 4,
-                    textStyle = MaterialTheme.typography.bodyMedium
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (uiState.inputText.isNotBlank() && !uiState.isLoading) {
+                            onSendMessage(null)
+                        }
+                    })
                 )
 
                 // Send Button

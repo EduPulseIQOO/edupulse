@@ -57,6 +57,9 @@ data class DoubtHistoryItem(
                     diagObj.put("maxHeight", d.maxHeight)
                     diagObj.put("timeOfFlight", d.timeOfFlight)
                 }
+                else -> {
+                    diagObj.put("type", "other")
+                }
             }
             obj.put("diagram", diagObj)
         }

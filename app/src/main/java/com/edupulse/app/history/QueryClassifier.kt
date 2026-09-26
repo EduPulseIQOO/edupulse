@@ -9,6 +9,7 @@ enum class QuerySubject(val displayName: String, val badgeText: String, val emoj
     PHYSICS("General Physics", "Physics", "⚛️"),
     MATH("Mathematics", "Math", "📐"),
     CHEMISTRY("Chemistry", "Chemistry", "🧪"),
+    BIOLOGY("Biology", "Biology", "🧬"),
     GENERAL("General Query", "General", "💬");
 
     companion object {
@@ -40,7 +41,17 @@ object QueryClassifier {
             is PhysicsDiagram.Projectile -> return QuerySubject.PROJECTILE
             is PhysicsDiagram.Kinematics -> return QuerySubject.KINEMATICS
             is PhysicsDiagram.FreeBody -> return QuerySubject.FORCES
-            null -> Unit
+            is PhysicsDiagram.ElectricCircuit -> return QuerySubject.PHYSICS
+            is PhysicsDiagram.HarmonicPendulum -> return QuerySubject.PHYSICS
+            is PhysicsDiagram.WaveMotion -> return QuerySubject.PHYSICS
+            is PhysicsDiagram.MathFunction -> return QuerySubject.MATH
+            is PhysicsDiagram.ChemistryAtom -> return QuerySubject.CHEMISTRY
+            is PhysicsDiagram.ChemistryPh -> return QuerySubject.CHEMISTRY
+            is PhysicsDiagram.ChemistryReaction -> return QuerySubject.CHEMISTRY
+            is PhysicsDiagram.BiologyCell -> return QuerySubject.BIOLOGY
+            is PhysicsDiagram.BiologyGenetics -> return QuerySubject.BIOLOGY
+            is PhysicsDiagram.EcosystemPyramid -> return QuerySubject.BIOLOGY
+            else -> Unit
         }
 
         val text = question.trim().lowercase()

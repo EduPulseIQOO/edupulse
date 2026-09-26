@@ -51,7 +51,7 @@ data class ChatMessage(
 enum class AppLanguage(val displayName: String, val promptInstruction: String) {
     ENGLISH(
         "English",
-        "Explain the solution in clear, simple step-by-step English."
+        "Write the entire response in clear, simple step-by-step English only. Do not use Thai, Telugu, Hindi, or any other script."
     ),
     TELUGU(
         "తెలుగు",
@@ -452,10 +452,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             ocrFixes = fixes
         )
         val assistantMsgId = java.util.UUID.randomUUID().toString()
+        val initialDiagram = DiagramExtractor.extract("", messageText)
         val assistantPlaceholder = ChatMessage(
             id = assistantMsgId,
             sender = MessageSender.ASSISTANT,
             text = "",
+            diagram = initialDiagram,
             isStreaming = true
         )
 
@@ -507,7 +509,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         state.copy(
                             messages = state.messages.map { msg ->
                                 if (msg.id == assistantMsgId) {
-                                    msg.copy(text = currentText, isStreaming = true)
+                                    msg.copy(text = currentText, diagram = msg.diagram ?: initialDiagram, isStreaming = true)
                                 } else {
                                     msg
                                 }
@@ -517,8 +519,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val fullResponse = responseBuilder.toString()
-                val diagram = DiagramExtractor.extract(fullResponse, messageText)
+                Log.e("HomeViewModel", ">>> Finished chat collection! Received ${fullResponse.length} chars")
+                val diagram = DiagramExtractor.extract(fullResponse, messageText) ?: initialDiagram
                 val cleanText = DiagramExtractor.stripDiagramTags(fullResponse)
+                val displayText = if (cleanText.isNotBlank()) {
+                    cleanText
+                } else if (diagram != null) {
+                    "Here is the interactive step-by-step simulation model:"
+                } else {
+                    "No response generated. Please tap 'Clear' or try rephrasing your question."
+                }
 
                 val updatedMessages = _uiState.value.messages.map { msg ->
                     if (msg.id == assistantMsgId) {
@@ -542,6 +552,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         com.edupulse.app.history.QuerySubject.FORCES -> "Forces (${(diagram as? PhysicsDiagram.FreeBody)?.appliedForce ?: (diagram as? PhysicsDiagram.FreeBody)?.mass ?: "F"})"
                         com.edupulse.app.history.QuerySubject.PHYSICS -> "Physics: ${messageText.take(28)}"
                         com.edupulse.app.history.QuerySubject.CHEMISTRY -> "Chemistry: ${messageText.take(28)}"
+                        com.edupulse.app.history.QuerySubject.BIOLOGY -> "Biology: ${messageText.take(28)}"
                         com.edupulse.app.history.QuerySubject.MATH -> "Math: ${messageText.take(28)}"
                         com.edupulse.app.history.QuerySubject.GENERAL -> if (messageText.length > 28) messageText.take(28) + "..." else messageText
                     }
@@ -588,7 +599,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         messages = state.messages.map { msg ->
                             if (msg.id == assistantMsgId) {
                                 msg.copy(
-                                    text = if (msg.text.isNotBlank()) msg.text else "Sorry, an error occurred while solving this problem.",
+                                    text = if (initialDiagram != null) "Here is the interactive simulation model for your problem:" else "Error generating response: ${e.message}",
+                                    diagram = initialDiagram,
                                     isStreaming = false
                                 )
                             } else {

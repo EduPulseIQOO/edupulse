@@ -91,6 +91,9 @@ data class ChatSession(
                         diagObj.put("maxHeight", d.maxHeight)
                         diagObj.put("timeOfFlight", d.timeOfFlight)
                     }
+                    else -> {
+                        diagObj.put("type", "other")
+                    }
                 }
                 mObj.put("diagram", diagObj)
             }

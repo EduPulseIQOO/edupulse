@@ -41,7 +41,7 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("onnx", "tflite", "litertlm", "bin")
+        noCompress += listOf("onnx", "tflite", "litertlm", "bin", "db")
     }
 }
 

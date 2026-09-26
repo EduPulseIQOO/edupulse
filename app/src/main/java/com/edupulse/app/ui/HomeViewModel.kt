@@ -132,6 +132,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 Log.w("HomeViewModel", "PaddleOCR background init: ${e.message}")
             }
         }
+
+        // Pre-initialize OKF repository in the background
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                com.edupulse.app.knowledge.OkfRepository.initialize(application)
+                Log.d("HomeViewModel", "OKF repository pre-initialized")
+            } catch (e: Exception) {
+                Log.w("HomeViewModel", "OKF background init: ${e.message}")
+            }
+        }
     }
 
     fun onCaptureClick() {

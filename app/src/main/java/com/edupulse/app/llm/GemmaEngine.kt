@@ -34,6 +34,11 @@ object GemmaEngine {
             "\n" +
             "Step 1: Reconstruct the true intended question by intelligently correcting OCR misreads, garbled words, or letter-digit confusions (e.g. 'mau' -> 'mass', 'bady' -> 'body', '11 s boought' -> 'is brought'). State the clean question under 'Clean Question:'.\n" +
             "\n" +
+            "Mathematical Rules:\n" +
+            "- If [GROUNDING KNOWLEDGE - OKF] is provided, you MUST strictly use its verified formulas.\n" +
+            "- For kinematics braking/stopping distance: v^2 = u^2 - 2*a*s and s = u^2 / (2 * a). When coming to rest, final velocity v = 0, so deceleration a = u^2 / (2 * s) and stopping distance s = u^2 / (2 * a). NEVER multiply u * v.\n" +
+            "- Always compute arithmetic carefully step-by-step.\n" +
+            "\n" +
             "Step 2: Solve the clean question step-by-step using this structure:\n" +
             "Clean Question:\n" +
             "Given / Key Facts:\n" +
@@ -41,7 +46,7 @@ object GemmaEngine {
             "Calculation / Explanation:\n" +
             "Final Answer:\n" +
             "\n" +
-            "Step 3: If this problem involves physics (motion, kinematics, forces, projectile, or mechanics), conclude your response with a structured simulation descriptor at the very end in one of these formats:\n" +
+            "Step 3: If this problem involves physics (motion, kinematics, forces, projectile, or mechanics), you MUST conclude your response with a structured simulation descriptor at the very end in one of these formats:\n" +
             "- 1D Motion / Kinematics (acceleration, braking, deceleration, free fall, constant speed):\n" +
             "[DIAGRAM:KINEMATICS | mass=... | u=... | v=... | a=... | F=... | s=... | t=...]\n" +
             "- 2D Parabolic Projectile Motion (launch angle, velocity, range, height):\n" +

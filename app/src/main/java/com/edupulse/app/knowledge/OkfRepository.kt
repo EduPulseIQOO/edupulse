@@ -15,6 +15,7 @@ object OkfRepository {
 
     /**
      * Initializes the OKF database from assets to app private storage.
+     * Uses openFd length and SharedPreferences tracking to ensure updates are reliably detected.
      */
     @Synchronized
     fun initialize(context: Context) {
@@ -22,99 +23,170 @@ object OkfRepository {
 
         try {
             val dbFile = File(context.filesDir, DB_NAME)
-            // Copy from assets if not exists or if asset size differs
-            if (!dbFile.exists() || dbFile.length() == 0L) {
+            val assetLength = try {
+                context.assets.openFd(DB_NAME).use { it.length }
+            } catch (e: Exception) {
+                try {
+                    context.assets.open(DB_NAME).use { it.available().toLong() }
+                } catch (e2: Exception) {
+                    -1L
+                }
+            }
+
+            val prefs = context.getSharedPreferences("okf_prefs", Context.MODE_PRIVATE)
+            val lastCopiedLength = prefs.getLong("last_db_length", -1L)
+            val needsCopy = !dbFile.exists() || dbFile.length() == 0L ||
+                    (assetLength > 0 && (dbFile.length() != assetLength || lastCopiedLength != assetLength))
+
+            if (needsCopy) {
+                if (database?.isOpen == true) {
+                    database?.close()
+                }
+                if (dbFile.exists()) dbFile.delete()
                 context.assets.open(DB_NAME).use { input ->
                     FileOutputStream(dbFile).use { output ->
                         input.copyTo(output)
                     }
                 }
-                Log.i(TAG, "Copied OKF knowledge.db from assets to ${dbFile.absolutePath}")
+                prefs.edit().putLong("last_db_length", dbFile.length()).apply()
+                Log.i(TAG, "Copied OKF knowledge.db from assets (${dbFile.length()} bytes) to ${dbFile.absolutePath}")
             }
 
             database = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
             isInitialized = true
-            Log.i(TAG, "OKF SQLite database opened successfully.")
+            Log.i(TAG, "OKF SQLite database opened successfully. Size: ${dbFile.length()} bytes.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize OKF database: ${e.message}", e)
         }
     }
 
+    private val STOP_WORDS = setOf(
+        "what", "is", "the", "a", "an", "and", "or", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "how", "why", "which", "where", "when", "who",
+        "does", "do", "did", "can", "could", "will", "would", "should", "shall",
+        "that", "this", "these", "those", "are", "were", "was", "been", "being",
+        "have", "has", "had", "find", "calculate", "state", "explain", "give", "define"
+    )
+
     /**
-     * Queries OKF knowledge base using FTS5 or keyword matching.
-     * Returns matching nodes sorted by relevance.
+     * Queries the local OKF graph using a small lexical ranker.
+     * The database is small enough to scan on-device, and refusing weak matches
+     * is safer than injecting an unrelated chapter into the LLM prompt.
      */
     fun findMatchingNodes(context: Context, queryText: String, limit: Int = 2): List<OkfNode> {
         initialize(context)
         val db = database ?: return emptyList()
-        val results = mutableListOf<OkfNode>()
+        val allTokens = queryText.lowercase()
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length > 1 }
+        val contentTokens = allTokens.filter { it !in STOP_WORDS }
+        val tokens = (if (contentTokens.isNotEmpty()) contentTokens else allTokens).distinct().take(12)
+        if (tokens.isEmpty()) return emptyList()
+
+        val ranked = mutableListOf<Pair<OkfNode, Int>>()
 
         try {
-            // Clean query tokens for FTS5 (remove punctuation, keep alphanumeric)
-            val tokens = queryText.split(Regex("[^a-zA-Z0-9]+"))
-                .filter { it.length > 2 }
-                .take(6)
-
-            if (tokens.isNotEmpty()) {
-                val ftsQuery = tokens.joinToString(" OR ") { "$it*" }
-                val cursor = db.rawQuery(
-                    """
-                    SELECT n.id, n.subject, n.class_level, n.chapter_title, n.unit_name, 
-                           n.frontmatter_yaml, n.body_markdown, n.keywords
-                    FROM okf_fts f
-                    JOIN okf_nodes n ON f.id = n.id
-                    WHERE okf_fts MATCH ?
-                    LIMIT ?
-                    """.trimIndent(),
-                    arrayOf(ftsQuery, limit.toString())
-                )
-
-                cursor.use {
-                    while (it.moveToNext()) {
-                        results.add(
-                            OkfNode(
-                                id = it.getString(0),
-                                subject = it.getString(1),
-                                classLevel = it.getInt(2),
-                                chapterTitle = it.getString(3),
-                                unitName = it.getString(4),
-                                frontmatterYaml = it.getString(5),
-                                bodyMarkdown = it.getString(6),
-                                keywords = it.getString(7)
-                            )
-                        )
+            val cursor = db.rawQuery(
+                "SELECT id, subject, class_level, chapter_title, unit_name, frontmatter_yaml, body_markdown, keywords, node_type, parent_id FROM okf_nodes",
+                null
+            )
+            cursor.use {
+                while (it.moveToNext()) {
+                    val node = OkfNode(
+                        id = it.getString(0),
+                        subject = it.getString(1),
+                        classLevel = it.getInt(2),
+                        chapterTitle = it.getString(3),
+                        unitName = it.getString(4),
+                        frontmatterYaml = it.getString(5),
+                        bodyMarkdown = it.getString(6),
+                        keywords = it.getString(7),
+                        nodeType = it.getString(8) ?: "chapter",
+                        parentId = it.getString(9)
+                    )
+                    val title = node.chapterTitle.lowercase()
+                    val unit = node.unitName.lowercase()
+                    val keywords = node.keywords.lowercase()
+                    val body = node.bodyMarkdown.lowercase()
+                    val score = tokens.sumOf { token ->
+                        when {
+                            title.split(Regex("[^\\p{L}\\p{N}]+")).contains(token) -> 8
+                            title.contains(token) -> 5
+                            unit.contains(token) -> 4
+                            keywords.contains(token) -> 3
+                            body.contains(token) -> 1
+                            else -> 0
+                        }
                     }
-                }
-            }
-
-            // Fallback: Default to Kinematics (keph102) if no direct FTS hit for physics text
-            if (results.isEmpty()) {
-                val fallbackCursor = db.rawQuery(
-                    "SELECT id, subject, class_level, chapter_title, unit_name, frontmatter_yaml, body_markdown, keywords FROM okf_nodes WHERE id LIKE '%keph102%' LIMIT 1",
-                    null
-                )
-                fallbackCursor.use {
-                    if (it.moveToFirst()) {
-                        results.add(
-                            OkfNode(
-                                id = it.getString(0),
-                                subject = it.getString(1),
-                                classLevel = it.getInt(2),
-                                chapterTitle = it.getString(3),
-                                unitName = it.getString(4),
-                                frontmatterYaml = it.getString(5),
-                                bodyMarkdown = it.getString(6),
-                                keywords = it.getString(7)
-                            )
-                        )
-                    }
+                    if (score >= 3) ranked += node to score
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error matching OKF nodes: ${e.message}", e)
         }
 
-        return results
+        val sorted = ranked
+            .sortedByDescending { it.second }
+            .map { it.first }
+            .take(limit)
+
+        Log.d(TAG, "findMatchingNodes: query='$queryText' matched ${sorted.size} nodes: ${sorted.map { it.id }}")
+        return sorted
+    }
+
+    /**
+     * OKF Graph traversal: fetches nodes linked to a given node via okf_edges table.
+     * edge_type can be "parent", "child", or "related".
+     */
+    fun getRelatedNodes(
+        context: Context,
+        nodeId: String,
+        edgeTypes: List<String> = listOf("related", "child")
+    ): List<OkfNode> {
+        initialize(context)
+        val db = database ?: return emptyList()
+        val relatedNodes = mutableListOf<OkfNode>()
+
+        try {
+            val placeholders = edgeTypes.joinToString(",") { "?" }
+            val edgeCursor = db.rawQuery(
+                "SELECT to_id FROM okf_edges WHERE from_id = ? AND edge_type IN ($placeholders)",
+                arrayOf(nodeId, *edgeTypes.toTypedArray())
+            )
+            val relatedIds = mutableListOf<String>()
+            edgeCursor.use {
+                while (it.moveToNext()) relatedIds.add(it.getString(0))
+            }
+
+            for (relId in relatedIds) {
+                val nodeCursor = db.rawQuery(
+                    "SELECT id, subject, class_level, chapter_title, unit_name, frontmatter_yaml, body_markdown, keywords, node_type, parent_id FROM okf_nodes WHERE id = ?",
+                    arrayOf(relId)
+                )
+                nodeCursor.use {
+                    if (it.moveToFirst()) {
+                        relatedNodes.add(
+                            OkfNode(
+                                id = it.getString(0),
+                                subject = it.getString(1),
+                                classLevel = it.getInt(2),
+                                chapterTitle = it.getString(3),
+                                unitName = it.getString(4),
+                                frontmatterYaml = it.getString(5),
+                                bodyMarkdown = it.getString(6),
+                                keywords = it.getString(7),
+                                nodeType = it.getString(8) ?: "chapter",
+                                parentId = it.getString(9)
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error traversing OKF graph for $nodeId: ${e.message}", e)
+        }
+
+        return relatedNodes
     }
 
     /**
@@ -140,7 +212,9 @@ object OkfRepository {
     }
 
     /**
-     * Constructs a compact grounding context to inject into Gemma 2B.
+     * Constructs a compact grounding context to inject into the on-device LLM (NEET-focused).
+     * Includes formulas, canonical dimensions, exam traps from the matched node,
+     * plus high-yield traps from graph-adjacent related nodes (OKF tree traversal).
      */
     fun getGroundingPrompt(context: Context, ocrText: String): String? {
         val nodes = findMatchingNodes(context, ocrText, limit = 1)
@@ -170,16 +244,83 @@ object OkfRepository {
             Log.e(TAG, "Error reading formulas: ${e.message}", e)
         }
 
+        val quantities = mutableListOf<String>()
+        try {
+            val cursor = db.rawQuery(
+                "SELECT symbol, name, dimension FROM okf_quantities WHERE node_id = ?",
+                arrayOf(node.id)
+            )
+            cursor.use {
+                while (it.moveToNext()) {
+                    val sym = it.getString(0)
+                    val name = it.getString(1)
+                    val dim = it.getString(2)
+                    if (!dim.isNullOrEmpty() && dim != "1") {
+                        quantities.add("- $name ($sym): [$dim]")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading quantities: ${e.message}", e)
+        }
+
+        val traps = mutableListOf<String>()
+        try {
+            val cursor = db.rawQuery(
+                "SELECT trap_text FROM okf_exam_traps WHERE node_id = ?",
+                arrayOf(node.id)
+            )
+            cursor.use {
+                while (it.moveToNext()) {
+                    traps.add("- ${it.getString(0)}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading traps: ${e.message}", e)
+        }
+
+        // OKF graph traversal: include exam traps from related nodes (1-hop neighbours)
+        val relatedNodes = getRelatedNodes(context, node.id, listOf("related"))
+        for (relNode in relatedNodes.take(2)) {
+            try {
+                val relCursor = db.rawQuery(
+                    "SELECT trap_text FROM okf_exam_traps WHERE node_id = ? LIMIT 2",
+                    arrayOf(relNode.id)
+                )
+                relCursor.use {
+                    while (it.moveToNext()) {
+                        traps.add("- [${relNode.chapterTitle}] ${it.getString(0)}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reading related traps for ${relNode.id}: ${e.message}", e)
+            }
+        }
+
+        if (formulas.isEmpty() && quantities.isEmpty() && traps.isEmpty()) {
+            return null
+        }
+
         val sb = java.lang.StringBuilder()
-        sb.append("\n[GROUNDING KNOWLEDGE - OKF]\n")
+        sb.append("\n[GROUNDING KNOWLEDGE - OKF / NEET]\n")
         sb.append("Topic: ${node.chapterTitle} (${node.unitName})\n")
+        if (quantities.isNotEmpty()) {
+            sb.append("Canonical Dimensions:\n")
+            quantities.take(6).forEach { sb.append("$it\n") }
+        }
         if (formulas.isNotEmpty()) {
             sb.append("Verified Formulas:\n")
             formulas.forEach { sb.append("$it\n") }
         }
+        if (traps.isNotEmpty()) {
+            sb.append("High-Yield NEET Exam Traps:\n")
+            traps.take(8).forEach { sb.append("$it\n") }
+        }
         sb.append("[/GROUNDING KNOWLEDGE]\n")
 
-        return sb.toString()
+        val grounding = sb.toString()
+        Log.i(TAG, "Generated grounding prompt (${grounding.length} chars) for node ${node.id} (${node.chapterTitle})")
+        return grounding
     }
 
     /**
@@ -197,10 +338,14 @@ object OkfRepository {
         val okfCardContent = """
             ---
             id: user.$cleanSlug
+            node_type: concept
             domain: $domain
-            subject: physics
+            subject: $domain
             chapter_title: "$title"
-            exam_tags: ["User_Custom", "JEE_NEET"]
+            exam_tags: ["NEET"]
+            parent_id: neet.user
+            children: []
+            related: []
             ---
             # $title
             $content

@@ -25,7 +25,9 @@ data class OkfNode(
     val unitName: String,
     val frontmatterYaml: String,
     val bodyMarkdown: String,
-    val keywords: String = ""
+    val keywords: String = "",
+    val nodeType: String = "chapter",
+    val parentId: String? = null
 )
 
 data class OkfOcrConfusion(

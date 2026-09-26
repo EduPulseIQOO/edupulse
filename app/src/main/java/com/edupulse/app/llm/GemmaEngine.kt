@@ -66,24 +66,30 @@ object GemmaEngine {
     suspend fun initialize(context: Context) = withContext(Dispatchers.IO) {
         if (engine != null) return@withContext
 
-        var resolvedModelFile = File(context.filesDir, MODEL_FILENAME)
-        if (!resolvedModelFile.exists()) {
-            val externalModel = File(context.getExternalFilesDir(null), MODEL_FILENAME)
-            if (externalModel.exists()) {
-                resolvedModelFile = externalModel
-            } else {
+        val candidates = listOf(
+            File(context.filesDir, MODEL_FILENAME),
+            File(context.getExternalFilesDir(null), MODEL_FILENAME),
+            File(File(context.getExternalFilesDir(null), "models"), MODEL_FILENAME),
+            File("/sdcard/Android/data/${context.packageName}/files", MODEL_FILENAME),
+            File("/sdcard/Download", MODEL_FILENAME),
+            File("/sdcard", MODEL_FILENAME)
+        )
+        val resolvedModelFile = candidates.firstOrNull { it.exists() && it.length() > 0 }
+            ?: run {
                 // Try copying from assets if bundled there
+                val internalDest = File(context.filesDir, MODEL_FILENAME)
                 try {
                     context.assets.open(MODEL_FILENAME).use { input ->
-                        resolvedModelFile.outputStream().use { output -> input.copyTo(output) }
+                        internalDest.outputStream().use { output -> input.copyTo(output) }
                     }
+                    internalDest
                 } catch (_: Exception) {
                     throw IllegalStateException(
-                        "Model file not found. Place '$MODEL_FILENAME' in internal files (${context.filesDir}), external files (${context.getExternalFilesDir(null)}), or assets."
+                        "Model file '$MODEL_FILENAME' not found. Checked: ${candidates.joinToString { it.absolutePath }}"
                     )
                 }
             }
-        }
+        android.util.Log.i("GemmaEngine", "Found Gemma model at: ${resolvedModelFile.absolutePath} (${resolvedModelFile.length() / (1024 * 1024)} MB)")
 
         val backends = listOf(
             Backend.GPU(),
